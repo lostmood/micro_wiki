@@ -1,0 +1,45 @@
+# Wiki Approval Policy v1
+# 审批策略配置文件 - 字段名已冻结
+
+version: "v1"
+mode: "human_required"
+auto_apply_enabled: false
+shadow_eval_enabled: true
+
+# 所有操作都需要人工审批
+operations:
+  - operation: "*"
+    approval: "required"
+    approvers: ["co-creator", "trusted_human"]
+
+# confidence 仅用于排序，不用于准入
+confidence_usage: "priority_signal_only"
+confidence_sorting:
+  high: ">= 0.9"    # 高置信度优先审核（更可能通过）
+  medium: "0.7-0.9" # 中等置信度
+  low: "< 0.7"      # 低置信度最后审核
+
+# v2 演进门槛（v1 不生效，仅记录）
+future_auto_apply_criteria:
+  enabled: false
+  minimum_patches: 200
+  agent_strict_accuracy_threshold: 0.95  # perfect rate >= 95%
+  agent_good_accuracy_threshold: 0.98    # (perfect + good) rate >= 98%
+  rollback_rate_threshold: 0.01  # < 1%
+  core_page_error_tolerance: 0
+  stability_window_days: 30
+
+# Shadow eval 配置
+shadow_eval:
+  enabled: true
+  display_mode: "hidden"  # "hidden" / "diagnostic_only" / "visible"
+  note: "默认隐藏，避免自动化偏见。仅在诊断模式或事后分析时展示。"
+
+# 审计追踪
+audit:
+  track_approval_time: true
+  track_patch_quality: true
+  track_reviewer_decision: true
+  track_rework_count: true
+  track_rollback_within_7days: true
+  generate_quality_report: true

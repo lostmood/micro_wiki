@@ -1,0 +1,54 @@
+# Wiki Approvers ACL v1
+# 审批人访问控制列表 - 字段名已冻结
+
+version: "v1"
+
+# 签名配置
+signature:
+  ttl_seconds: 300  # 5 分钟
+  nonce_bits: 128
+  algorithm: "hmac_sha256"
+  cleanup_interval_hours: 1
+
+# 审批人名单（白名单）
+authorized_approvers:
+  - id: "co-creator"
+    name: "铲屎官"
+    role: "CVO"
+    auth_method: "session_identity"  # 通过 session 身份验证
+    permissions: ["approve_all", "rollback"]
+
+  - id: "trusted-human-1"
+    name: "可信审批人1"
+    role: "reviewer"
+    auth_method: "api_key"  # 通过 API key 验证
+    api_key_hash: "sha256:placeholder"  # 实际部署时替换
+    permissions: ["approve_low_risk", "approve_medium_risk"]
+
+# 操作权限映射
+operation_permissions:
+  approve_all:
+    - "*"
+
+  approve_low_risk:
+    - "create_page"
+    - "add_link"
+    - "update_metadata"
+
+  approve_medium_risk:
+    - "update_page_content"
+    - "restructure_category"
+
+  approve_high_risk:
+    - "delete_page"
+    - "schema_change"
+
+  rollback:
+    - "rollback_change"
+
+# 审计要求
+audit:
+  require_signature: true  # 所有审批必须有签名
+  signature_method: "hmac_sha256"
+  log_all_attempts: true
+  audit_dir: ".audit"
