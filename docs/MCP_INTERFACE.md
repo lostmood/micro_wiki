@@ -143,7 +143,18 @@ def wiki_ingest(source_path: str, agent_id: str) -> dict
 {
     "status": "failed",
     "reason": "lint_failed",
-    "errors": ["missing_source_refs", "broken_link"]
+    "errors": [
+        {
+            "code": "missing_source_refs",
+            "file": "wiki/concepts/transformer.md",
+            "message": "Field 'source_refs' must be a non-empty list."
+        },
+        {
+            "code": "broken_wikilink",
+            "file": "wiki/concepts/transformer.md",
+            "message": "Wikilink target 'concept-attention' does not exist."
+        }
+    ]
 }
 ```
 

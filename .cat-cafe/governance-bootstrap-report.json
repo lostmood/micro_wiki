@@ -1,0 +1,78 @@
+{
+  "projectPath": "/home/haoshangbin/project/micro_wiki",
+  "timestamp": 1776149746623,
+  "packVersion": "1.3.0",
+  "actions": [
+    {
+      "file": "CLAUDE.md",
+      "action": "skipped",
+      "reason": "managed block already up to date"
+    },
+    {
+      "file": "AGENTS.md",
+      "action": "skipped",
+      "reason": "managed block already up to date"
+    },
+    {
+      "file": "GEMINI.md",
+      "action": "skipped",
+      "reason": "managed block already up to date"
+    },
+    {
+      "file": "KIMI.md",
+      "action": "skipped",
+      "reason": "managed block already up to date"
+    },
+    {
+      "file": ".claude/skills",
+      "action": "skipped",
+      "reason": "symlink already correct"
+    },
+    {
+      "file": ".codex/skills",
+      "action": "skipped",
+      "reason": "symlink already correct"
+    },
+    {
+      "file": ".gemini/skills",
+      "action": "skipped",
+      "reason": "symlink already correct"
+    },
+    {
+      "file": ".kimi/skills",
+      "action": "skipped",
+      "reason": "symlink already correct"
+    },
+    {
+      "file": "BACKLOG.md",
+      "action": "skipped",
+      "reason": "file already exists"
+    },
+    {
+      "file": "docs/SOP.md",
+      "action": "skipped",
+      "reason": "file already exists"
+    },
+    {
+      "file": "docs/features/.gitkeep",
+      "action": "skipped",
+      "reason": "file already exists"
+    },
+    {
+      "file": "docs/decisions/.gitkeep",
+      "action": "skipped",
+      "reason": "file already exists"
+    },
+    {
+      "file": "docs/discussions/.gitkeep",
+      "action": "skipped",
+      "reason": "file already exists"
+    },
+    {
+      "file": "docs/features/TEMPLATE.md",
+      "action": "skipped",
+      "reason": "file already exists"
+    }
+  ],
+  "dryRun": false
+}
