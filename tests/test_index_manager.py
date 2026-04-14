@@ -3,8 +3,10 @@ Tests for IndexManager (Day3).
 """
 
 import json
+import os
 import shutil
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -77,7 +79,28 @@ Summary line.
         shutil.rmtree(root)
 
 
+def test_should_compact_by_interval_without_meta():
+    root = Path(tempfile.mkdtemp())
+    try:
+        manager = IndexManager(
+            str(root),
+            compaction_threshold=100,
+            max_compaction_interval_seconds=1,
+        )
+        manager.append_operation(
+            IndexOperation("op-1", 1.0, "add", "p1", "Title 1", "Summary 1", "concepts")
+        )
+
+        stale_ts = time.time() - 5
+        os.utime(manager.index_ops_file, (stale_ts, stale_ts))
+
+        assert manager.should_compact()
+    finally:
+        shutil.rmtree(root)
+
+
 if __name__ == "__main__":
     test_replay_and_compaction()
     test_record_patch_appends_ops()
+    test_should_compact_by_interval_without_meta()
     print("\n✓ All index manager tests passed")

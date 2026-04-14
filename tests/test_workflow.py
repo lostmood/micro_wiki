@@ -419,3 +419,75 @@ def test_apply_patch_records_shadow_eval_and_index_ops(temp_wiki):
     assert len(ops_lines) == 1
     op = json.loads(ops_lines[0])
     assert op["page_id"] == "page-indexed"
+
+
+def test_apply_patch_update_prefers_existing_subdir_page(temp_wiki):
+    """Update should target existing page under concepts/ instead of creating wiki/{id}.md."""
+    workflow = WikiWorkflow(temp_wiki)
+    acl = workflow.acl
+
+    concepts_page = Path(temp_wiki) / "wiki" / "concepts" / "concept-a.md"
+    concepts_page.parent.mkdir(parents=True, exist_ok=True)
+    concepts_page.write_text(
+        """---
+page_id: concept-a
+title: Concept A
+updated: 2026-04-14
+confidence: 0.91
+source_refs: [src-a]
+---
+Original.
+""",
+        encoding="utf-8",
+    )
+
+    proposed = workflow.propose_patch(
+        agent_id="agent-test",
+        operation="update",
+        pages=["concept-a"],
+        diff="updated from workflow",
+        confidence=0.95,
+        sources=["src-a"],
+    )
+    patch_id = proposed["patch_id"]
+    base_commit = workflow._get_current_commit()
+
+    signed_approval = acl.sign_approval(
+        approver_id="human-alice",
+        patch_id=patch_id,
+        expected_base_commit=base_commit,
+    )
+    applied = workflow.apply_patch(patch_id, signed_approval, base_commit)
+    assert applied["status"] == "success"
+
+    content = concepts_page.read_text(encoding="utf-8")
+    assert "updated from workflow" in content
+    assert not (Path(temp_wiki) / "wiki" / "concept-a.md").exists()
+
+
+def test_apply_patch_update_missing_page_fails_fast(temp_wiki):
+    """Update on a missing page should return structured failure instead of silent no-op."""
+    workflow = WikiWorkflow(temp_wiki)
+    acl = workflow.acl
+
+    proposed = workflow.propose_patch(
+        agent_id="agent-test",
+        operation="update",
+        pages=["does-not-exist"],
+        diff="update",
+        confidence=0.95,
+        sources=["src-a"],
+    )
+    patch_id = proposed["patch_id"]
+    base_commit = workflow._get_current_commit()
+
+    signed_approval = acl.sign_approval(
+        approver_id="human-alice",
+        patch_id=patch_id,
+        expected_base_commit=base_commit,
+    )
+
+    result = workflow.apply_patch(patch_id, signed_approval, base_commit)
+    assert result["status"] == "failed"
+    assert result["reason"] == "missing_target_pages"
+    assert result["missing_pages"] == ["does-not-exist"]

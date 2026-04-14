@@ -283,22 +283,37 @@ class WikiWorkflow:
                     "message": "Base commit changed during lock acquisition"
                 }
 
-            # 11. Generate change_id
+            # 11. Validate target pages for update/delete before mutation.
+            if patch.operation in ("update", "delete"):
+                missing_pages = [
+                    page_id
+                    for page_id in patch.affected_pages
+                    if not self._resolve_existing_page_path(page_id)
+                ]
+                if missing_pages:
+                    return {
+                        "status": "failed",
+                        "reason": "missing_target_pages",
+                        "message": "Some target pages do not exist for the requested operation",
+                        "missing_pages": missing_pages,
+                    }
+
+            # 12. Generate change_id
             change_id = self._generate_change_id()
 
-            # 12. Apply changes - write diff to files
+            # 13. Apply changes - write diff to files
             self._apply_changes(patch)
 
-            # 12.5. Record index operations and compact when needed
+            # 13.5. Record index operations and compact when needed
             self.index_manager.record_patch(patch)
 
-            # 13. Record audit log
+            # 14. Record audit log
             self._append_to_audit_log(patch, approver_id, change_id, signed_approval)
 
-            # 14. Git commit - create real commit
+            # 15. Git commit - create real commit
             commit_hash = self._git_commit(patch, approver_id, change_id)
 
-            # 15. Cleanup .pending/
+            # 16. Cleanup .pending/
             self._cleanup_patch(patch_id)
 
             return {
@@ -347,22 +362,12 @@ class WikiWorkflow:
         # For now, we lint the pages that would be affected by the patch
         # In a full implementation, we would parse the diff and lint the modified content
 
-        # Get list of wiki pages to lint
-        wiki_dir = f"{self.wiki_root}/wiki"
         pages_to_lint = []
 
         for page_id in patch.affected_pages:
-            # Try common locations for wiki pages
-            possible_paths = [
-                f"{wiki_dir}/{page_id}.md",
-                f"{wiki_dir}/concepts/{page_id}.md",
-                f"{wiki_dir}/entities/{page_id}.md",
-            ]
-
-            for path in possible_paths:
-                if os.path.exists(path):
-                    pages_to_lint.append(path)
-                    break
+            existing_path = self._resolve_existing_page_path(page_id)
+            if existing_path:
+                pages_to_lint.append(existing_path)
 
         # If no existing pages found (e.g., new page creation), create minimal lint check
         if not pages_to_lint and patch.operation == "create":
@@ -451,13 +456,14 @@ class WikiWorkflow:
         # For now, implement minimal file writing for create operations
         # Full diff parsing and application would be in a later phase
 
-        wiki_dir = f"{self.wiki_root}/wiki"
+        wiki_dir = os.path.join(self.wiki_root, "wiki")
         os.makedirs(wiki_dir, exist_ok=True)
 
         for page_id in patch.affected_pages:
             if patch.operation == "create":
                 # Create new page with minimal content
-                page_path = f"{wiki_dir}/{page_id}.md"
+                page_path = self._target_page_path(page_id)
+                os.makedirs(os.path.dirname(page_path), exist_ok=True)
 
                 # Generate frontmatter with required fields
                 content = f"""---
@@ -477,17 +483,44 @@ source_refs: {patch.source_refs}
 
             elif patch.operation == "update":
                 # For updates, append diff content (simplified)
-                page_path = f"{wiki_dir}/{page_id}.md"
-                if os.path.exists(page_path):
-                    with open(page_path, 'a') as f:
-                        f.write(f"\n\n<!-- Update from {patch.patch_id} -->\n")
-                        f.write(patch.diff_content)
+                page_path = self._resolve_existing_page_path(page_id)
+                if not page_path:
+                    raise FileNotFoundError(
+                        f"Cannot update missing page '{page_id}' in known wiki paths"
+                    )
+                with open(page_path, 'a') as f:
+                    f.write(f"\n\n<!-- Update from {patch.patch_id} -->\n")
+                    f.write(patch.diff_content)
 
             elif patch.operation == "delete":
                 # For deletes, remove the file
-                page_path = f"{wiki_dir}/{page_id}.md"
-                if os.path.exists(page_path):
-                    os.remove(page_path)
+                page_path = self._resolve_existing_page_path(page_id)
+                if not page_path:
+                    raise FileNotFoundError(
+                        f"Cannot delete missing page '{page_id}' in known wiki paths"
+                    )
+                os.remove(page_path)
+
+    def _candidate_page_paths(self, page_id: str) -> List[str]:
+        wiki_dir = os.path.join(self.wiki_root, "wiki")
+        return [
+            os.path.join(wiki_dir, f"{page_id}.md"),
+            os.path.join(wiki_dir, "concepts", f"{page_id}.md"),
+            os.path.join(wiki_dir, "entities", f"{page_id}.md"),
+            os.path.join(wiki_dir, "explorations", f"{page_id}.md"),
+        ]
+
+    def _resolve_existing_page_path(self, page_id: str) -> Optional[str]:
+        for path in self._candidate_page_paths(page_id):
+            if os.path.exists(path):
+                return path
+        return None
+
+    def _target_page_path(self, page_id: str) -> str:
+        existing = self._resolve_existing_page_path(page_id)
+        if existing:
+            return existing
+        return self._candidate_page_paths(page_id)[0]
 
     def _git_commit(self, patch: Patch, approver_id: str, change_id: str) -> str:
         """Create real git commit"""
