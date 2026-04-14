@@ -20,11 +20,12 @@ import uuid
 import hashlib
 from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Any
-from pathlib import Path
 
 from wiki_engine.lock_manager import LockManager
 from wiki_engine.acl import ApprovalACL
 from wiki_engine.lint import WikiLinter
+from wiki_engine.index_manager import IndexManager
+from wiki_engine.shadow_evaluator import ShadowEvaluator
 
 
 @dataclass
@@ -42,6 +43,7 @@ class Patch:
     created_at: float
     lint_status: Optional[str] = None
     lint_errors: Optional[List[Dict]] = None
+    shadow_eval_result: Optional[Dict[str, Any]] = None
 
 
 class WikiWorkflow:
@@ -62,6 +64,8 @@ class WikiWorkflow:
         self.lock_manager = LockManager(wiki_root)
         self.acl = ApprovalACL(f"{wiki_root}/.schema/approvers.yaml")
         self.linter = WikiLinter()
+        self.index_manager = IndexManager(wiki_root)
+        self.shadow_evaluator = ShadowEvaluator()
 
         self._ensure_dirs()
 
@@ -113,6 +117,16 @@ class WikiWorkflow:
             base_commit=base_commit,
             created_at=time.time()
         )
+
+        # Run shadow evaluation (record-only in v1, never auto-apply)
+        shadow_eval = self.shadow_evaluator.evaluate_patch(
+            operation=operation,
+            confidence=confidence,
+            source_refs=sources,
+            affected_pages=pages,
+            diff_content=diff,
+        )
+        patch.shadow_eval_result = shadow_eval.to_dict()
 
         # Run lint checks
         lint_result = self._run_lint(patch)
@@ -275,6 +289,9 @@ class WikiWorkflow:
             # 12. Apply changes - write diff to files
             self._apply_changes(patch)
 
+            # 12.5. Record index operations and compact when needed
+            self.index_manager.record_patch(patch)
+
             # 13. Record audit log
             self._append_to_audit_log(patch, approver_id, change_id, signed_approval)
 
@@ -422,6 +439,7 @@ class WikiWorkflow:
             "source_refs": patch.source_refs,
             "base_commit": patch.base_commit,
             "applied_at": time.time(),
+            "shadow_eval_result": patch.shadow_eval_result,
             "approval_signature": signed_approval
         }
 
@@ -478,7 +496,7 @@ source_refs: {patch.source_refs}
         try:
             # Stage all changes in wiki/
             subprocess.run(
-                ["git", "add", "wiki/"],
+                ["git", "add", "wiki/", ".index/"],
                 cwd=self.wiki_root,
                 capture_output=True,
                 text=True,

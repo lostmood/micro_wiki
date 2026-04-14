@@ -349,3 +349,73 @@ def test_apply_patch_double_check_toctou_under_lock(temp_wiki):
     assert result["reason"] == "base_commit_changed"
     assert "changed during lock acquisition" in result["message"]
     assert "during lock acquisition" in result["message"]
+
+
+def test_propose_patch_update_existing_page_runs_real_lint(temp_wiki):
+    """Regression test: update on existing page should run linter without crashing."""
+    workflow = WikiWorkflow(temp_wiki)
+
+    # Create a valid page that linter can parse
+    page_path = Path(temp_wiki) / "wiki" / "page-1.md"
+    page_path.write_text(
+        """---
+page_id: page-1
+title: Page 1
+updated: 2026-04-14
+confidence: 0.9
+source_refs: [source-1]
+---
+Body.
+""",
+        encoding="utf-8",
+    )
+
+    result = workflow.propose_patch(
+        agent_id="agent-test",
+        operation="update",
+        pages=["page-1"],
+        diff="+ updated body",
+        confidence=0.95,
+        sources=["source-1"],
+    )
+
+    assert result["status"] == "success"
+    assert result["lint_status"] == "passed"
+
+
+def test_apply_patch_records_shadow_eval_and_index_ops(temp_wiki):
+    """Successful apply should persist shadow eval and append index operation."""
+    workflow = WikiWorkflow(temp_wiki)
+    acl = workflow.acl
+
+    proposed = workflow.propose_patch(
+        agent_id="agent-test",
+        operation="create",
+        pages=["page-indexed"],
+        diff="+ New content",
+        confidence=0.96,
+        sources=["source-1"],
+    )
+    patch_id = proposed["patch_id"]
+    base_commit = workflow._get_current_commit()
+
+    # Patch record should include shadow eval result.
+    patch_file = Path(temp_wiki) / ".pending" / f"{patch_id}.json"
+    patch_data = json.loads(patch_file.read_text(encoding="utf-8"))
+    assert patch_data["shadow_eval_result"] is not None
+
+    signed_approval = acl.sign_approval(
+        approver_id="human-alice",
+        patch_id=patch_id,
+        expected_base_commit=base_commit,
+    )
+
+    applied = workflow.apply_patch(patch_id, signed_approval, base_commit)
+    assert applied["status"] == "success"
+
+    index_ops_file = Path(temp_wiki) / ".index" / "index.ops.jsonl"
+    assert index_ops_file.exists()
+    ops_lines = index_ops_file.read_text(encoding="utf-8").strip().splitlines()
+    assert len(ops_lines) == 1
+    op = json.loads(ops_lines[0])
+    assert op["page_id"] == "page-indexed"
