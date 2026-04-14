@@ -178,6 +178,13 @@ class WikiWorkflow:
 
         # 3. Critical: Verify patch_id matches BEFORE signature verification
         # This prevents nonce consumption on wrong patch_id
+        if "patch_id" not in signed_approval:
+            return {
+                "status": "failed",
+                "reason": "missing_patch_id",
+                "message": "Signature missing required field: patch_id"
+            }
+
         if signed_approval["patch_id"] != patch_id:
             return {
                 "status": "failed",
@@ -373,7 +380,7 @@ class WikiWorkflow:
             )
 
         # Lint existing pages
-        return self.linter.lint_pages(pages_to_lint)
+        return self.linter.lint_paths(pages_to_lint)
 
     def _save_patch(self, patch: Patch):
         """Save patch to .pending/"""
@@ -434,12 +441,13 @@ class WikiWorkflow:
                 # Create new page with minimal content
                 page_path = f"{wiki_dir}/{page_id}.md"
 
-                # Generate minimal frontmatter
+                # Generate frontmatter with required fields
                 content = f"""---
-id: {page_id}
+page_id: {page_id}
+title: {page_id}
+updated: {time.time()}
 confidence: {patch.confidence}
 source_refs: {patch.source_refs}
-created_at: {time.time()}
 ---
 
 # {page_id}
@@ -508,6 +516,5 @@ Confidence: {patch.confidence}
             return result.stdout.strip()[:7]
 
         except subprocess.CalledProcessError as e:
-            # If git commit fails, return a placeholder but log the error
-            print(f"Git commit failed: {e.stderr}")
-            return hashlib.sha1(change_id.encode()).hexdigest()[:7]
+            # If git commit fails, raise error instead of returning fake hash
+            raise RuntimeError(f"Git commit failed: {e.stderr}") from e
