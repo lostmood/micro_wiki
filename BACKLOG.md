@@ -11,3 +11,4 @@ created: 2026-04-14
 
 | ID | Name | Status | Owner | Link |
 |----|------|--------|-------|------|
+| F001 | Wiki Engine v1 Core | ✅ done | @opus | [docs/features/F001-wiki-engine-v1.md](docs/features/F001-wiki-engine-v1.md) |

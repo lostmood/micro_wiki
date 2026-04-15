@@ -1,7 +1,7 @@
 # Day4 实施计划：MCP 工具层
 
 **Date**: 2026-04-14
-**Status**: Design Review (待 @codex 放行)
+**Status**: ✅ Completed (commit 54807a8)
 
 ## 目标
 
