@@ -226,12 +226,12 @@ class WikiMCPServer:
             field_schema = properties[field]
             expected_type = field_schema.get("type")
 
-            # Type validation
+            # Type validation (bool is subclass of int, must check first)
             if expected_type == "string" and not isinstance(value, str):
                 return f"Field '{field}' must be string"
-            elif expected_type == "integer" and not isinstance(value, int):
+            elif expected_type == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
                 return f"Field '{field}' must be integer"
-            elif expected_type == "number" and not isinstance(value, (int, float)):
+            elif expected_type == "number" and (isinstance(value, bool) or not isinstance(value, (int, float))):
                 return f"Field '{field}' must be number"
             elif expected_type == "array" and not isinstance(value, list):
                 return f"Field '{field}' must be array"
@@ -265,23 +265,29 @@ def serve_stdio(server: WikiMCPServer, in_stream: Any = None, out_stream: Any = 
     out_stream = out_stream if out_stream is not None else sys.stdout.buffer
 
     while True:
-        # Read Content-Length header
-        header_line = in_stream.readline()
-        if not header_line:
-            break
+        # Read headers until empty line
+        content_length = None
+        while True:
+            header_line = in_stream.readline()
+            if not header_line:
+                return  # EOF
 
-        header = header_line.decode('utf-8').strip()
-        if not header.startswith('Content-Length: '):
-            continue
+            header = header_line.decode('utf-8').strip()
 
-        try:
-            content_length = int(header.split(':', 1)[1].strip())
-        except (ValueError, IndexError):
-            continue
+            # Empty line marks end of headers
+            if not header:
+                break
 
-        # Read empty line separator
-        separator = in_stream.readline()
-        if separator.strip():
+            # Parse Content-Length header
+            if header.startswith('Content-Length:'):
+                try:
+                    content_length = int(header.split(':', 1)[1].strip())
+                except (ValueError, IndexError):
+                    pass
+            # Ignore other headers (e.g., Content-Type)
+
+        # Must have Content-Length to proceed
+        if content_length is None:
             continue
 
         # Read JSON body

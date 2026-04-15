@@ -258,3 +258,61 @@ def test_serve_stdio_notification_no_response(temp_wiki):
     # Should produce no output for notification
     output = out_stream.getvalue()
     assert len(output) == 0
+
+
+def test_serve_stdio_with_multiple_headers(temp_wiki):
+    """Test P1: Support multiple headers (Content-Length + Content-Type)."""
+    server = WikiMCPServer(temp_wiki)
+
+    request = {"jsonrpc": "2.0", "id": 9, "method": "tools/list", "params": {}}
+    request_json = json.dumps(request)
+    request_bytes = request_json.encode('utf-8')
+
+    # Build framed request with multiple headers
+    framed_request = (
+        f'Content-Length: {len(request_bytes)}\r\n'
+        f'Content-Type: application/json\r\n'
+        f'\r\n'
+    ).encode('utf-8') + request_bytes
+
+    in_stream = io.BytesIO(framed_request)
+    out_stream = io.BytesIO()
+
+    serve_stdio(server, in_stream=in_stream, out_stream=out_stream)
+
+    output = out_stream.getvalue()
+
+    # Should produce valid response
+    assert len(output) > 0
+
+    # Parse response
+    header_end = output.find(b'\r\n\r\n')
+    assert header_end > 0
+
+    header = output[:header_end].decode('utf-8')
+    assert header.startswith('Content-Length: ')
+
+    content_length = int(header.split(':', 1)[1].strip())
+    body = output[header_end + 4:header_end + 4 + content_length]
+
+    response = json.loads(body.decode('utf-8'))
+    assert response["jsonrpc"] == "2.0"
+    assert response["id"] == 9
+    assert "result" in response
+
+
+def test_tools_call_rejects_bool_as_integer(temp_wiki):
+    """Test P2: Parameter validation rejects bool when integer expected."""
+    server = WikiMCPServer(temp_wiki)
+    req = {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": {"name": "wiki_search", "arguments": {"query": "test", "limit": True}},
+    }
+    resp = server.handle_request(req)
+
+    assert "error" in resp
+    assert resp["error"]["code"] == -32602
+    assert "limit" in resp["error"]["message"]
+    assert "integer" in resp["error"]["message"]
