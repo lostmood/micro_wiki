@@ -367,12 +367,14 @@ def serve_stdio(server: WikiMCPServer, in_stream: Any = None, out_stream: Any = 
             if not header:
                 break
 
-            # Parse Content-Length header
-            if header.startswith('Content-Length:'):
-                try:
-                    content_length = int(header.split(':', 1)[1].strip())
-                except (ValueError, IndexError):
-                    pass
+            # Parse Content-Length header (case-insensitive per HTTP spec)
+            if ':' in header:
+                header_name, header_value = header.split(':', 1)
+                if header_name.lower() == 'content-length':
+                    try:
+                        content_length = int(header_value.strip())
+                    except (ValueError, IndexError):
+                        pass
             # Ignore other headers (e.g., Content-Type)
 
         # Must have Content-Length to proceed

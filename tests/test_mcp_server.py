@@ -362,3 +362,75 @@ Link to [[peer-page]].
     node_ids = {node["page_id"] for node in structured["nodes"]}
     assert "test-page" in node_ids
     assert "peer-page" in node_ids
+
+
+def test_serve_stdio_case_insensitive_content_length(temp_wiki):
+    """Test P1: Content-Length header should be case-insensitive per HTTP spec."""
+    server = WikiMCPServer(temp_wiki)
+
+    request = {"jsonrpc": "2.0", "id": 12, "method": "tools/list", "params": {}}
+    request_json = json.dumps(request)
+    request_bytes = request_json.encode('utf-8')
+
+    # Test lowercase 'content-length'
+    framed_request = (
+        f'content-length: {len(request_bytes)}\r\n'
+        f'\r\n'
+    ).encode('utf-8') + request_bytes
+
+    in_stream = io.BytesIO(framed_request)
+    out_stream = io.BytesIO()
+
+    serve_stdio(server, in_stream=in_stream, out_stream=out_stream)
+
+    output = out_stream.getvalue()
+    header_end = output.find(b'\r\n\r\n')
+    assert header_end > 0
+
+    header = output[:header_end].decode('utf-8')
+    content_length = int(header.split(':', 1)[1].strip())
+    body = output[header_end + 4:header_end + 4 + content_length]
+
+    response = json.loads(body.decode('utf-8'))
+    assert response["jsonrpc"] == "2.0"
+    assert response["id"] == 12
+    assert "result" in response
+
+
+def test_serve_stdio_mixed_case_content_length(temp_wiki):
+    """Test P1: Content-Length header with mixed case (Content-length, CONTENT-LENGTH)."""
+    server = WikiMCPServer(temp_wiki)
+
+    test_cases = [
+        'Content-length',  # Mixed case
+        'CONTENT-LENGTH',  # All uppercase
+        'CoNtEnT-LeNgTh',  # Random case
+    ]
+
+    for idx, header_name in enumerate(test_cases):
+        request = {"jsonrpc": "2.0", "id": 13 + idx, "method": "tools/list", "params": {}}
+        request_json = json.dumps(request)
+        request_bytes = request_json.encode('utf-8')
+
+        framed_request = (
+            f'{header_name}: {len(request_bytes)}\r\n'
+            f'\r\n'
+        ).encode('utf-8') + request_bytes
+
+        in_stream = io.BytesIO(framed_request)
+        out_stream = io.BytesIO()
+
+        serve_stdio(server, in_stream=in_stream, out_stream=out_stream)
+
+        output = out_stream.getvalue()
+        header_end = output.find(b'\r\n\r\n')
+        assert header_end > 0, f"Failed for header: {header_name}"
+
+        header = output[:header_end].decode('utf-8')
+        content_length = int(header.split(':', 1)[1].strip())
+        body = output[header_end + 4:header_end + 4 + content_length]
+
+        response = json.loads(body.decode('utf-8'))
+        assert response["jsonrpc"] == "2.0"
+        assert response["id"] == 13 + idx
+        assert "result" in response
