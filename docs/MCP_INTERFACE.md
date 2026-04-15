@@ -20,25 +20,35 @@ Search wiki pages by query.
 
 **Signature:**
 ```python
-def wiki_search(query: str, scope: str = "all", limit: int = 10) -> List[Page]
+def wiki_search(query: str, scope: str = None, limit: int = 10) -> Dict[str, Any]
 ```
 
 **Parameters:**
 - `query`: Search query string
-- `scope`: Search scope ("docs" / "memory" / "threads" / "sessions" / "all")
+- `scope`: **RESERVED for v2** - Currently unsupported. If provided, will return a warning and be ignored. Planned values: `"docs"` / `"memory"` / `"threads"` / `"sessions"` / `"all"`
 - `limit`: Maximum number of results
 
 **Returns:**
 ```python
-[
-    {
-        "page_id": "concept-transformer",
-        "title": "Transformer Architecture",
-        "summary": "...",
-        "relevance_score": 0.95
-    }
-]
+{
+    "status": "success",
+    "results": [
+        {
+            "page_id": "concept-transformer",
+            "title": "Transformer Architecture",
+            "summary": "...",
+            "relevance_score": 0.95
+        }
+    ],
+    "total": 3,
+    "warnings": ["unsupported_scope: scope parameter 'docs' is reserved for v2 and currently ignored"]  # Optional, only if scope provided
+}
 ```
+
+**v1 Behavior:**
+- `scope` parameter is accepted but ignored
+- If `scope` is provided, a warning is added to the response
+- All searches operate on the entire wiki (equivalent to future `scope="all"`)
 
 ### wiki_read
 
@@ -329,11 +339,12 @@ Run lint checks on wiki content.
 
 **Signature:**
 ```python
-def wiki_lint(scope: str = "all") -> LintReport
+def wiki_lint(wiki_root: str, scope: str = "all") -> Dict[str, Any]
 ```
 
 **Parameters:**
-- `scope`: Lint scope ("all" / "pending" / "recent")
+- `wiki_root`: Path to wiki root directory
+- `scope`: Lint scope - `"all"` (all pages) / `"pending"` (pages affected by pending patches) / `"recent"` (pages changed in last commit)
 
 **Returns:**
 ```python
@@ -344,12 +355,27 @@ def wiki_lint(scope: str = "all") -> LintReport
         {"name": "dead_link_check", "passed": true},
         {"name": "orphan_page_check", "passed": true},
         {"name": "reference_existence", "passed": true},
-        {"name": "duplicate_topic_check", "passed": true}
+        {"name": "duplicate_topic_check", "passed": true},
+        {"name": "source_refs_check", "passed": true}
     ],
     "errors": [],
     "warnings": []
 }
 ```
+
+**Error Response (invalid scope):**
+```python
+{
+    "status": "failed",
+    "reason": "invalid_scope",
+    "message": "scope must be one of: all, pending, recent"
+}
+```
+
+**v1 Behavior:**
+- `scope="all"`: Lint all `.md` files in `wiki/` directory
+- `scope="pending"`: Lint only pages affected by patches in `.pending/`
+- `scope="recent"`: Lint only pages changed in `HEAD~1..HEAD` (requires git)
 
 ### wiki_rollback
 
