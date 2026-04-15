@@ -18,7 +18,13 @@ from wiki_engine.mcp_tools import (
     wiki_status,
     wiki_search,
     wiki_propose_patch,
-    wiki_apply_patch
+    wiki_apply_patch,
+    wiki_graph_neighbors,
+    wiki_ingest,
+    wiki_list_conflicts,
+    wiki_resolve_conflict,
+    wiki_lint,
+    wiki_rollback,
 )
 
 
@@ -481,3 +487,198 @@ def test_wiki_apply_patch_nonexistent_patch(temp_wiki):
 
     assert result["status"] == "failed"
     assert result["reason"] == "patch_not_found"
+
+
+# ============================================================================
+# wiki_graph_neighbors tests
+# ============================================================================
+
+def test_wiki_graph_neighbors_returns_connected_nodes(temp_wiki):
+    """Graph query should return linked neighbors."""
+    page_a = """---
+page_id: graph-a
+title: Graph A
+updated: 1234567890.0
+confidence: 0.95
+source_refs: [source-1]
+---
+See [[graph-b]].
+"""
+    page_b = """---
+page_id: graph-b
+title: Graph B
+updated: 1234567890.0
+confidence: 0.95
+source_refs: [source-1]
+---
+Backlink to [[graph-a]].
+"""
+    (Path(temp_wiki) / "wiki" / "concepts" / "graph-a.md").write_text(page_a)
+    (Path(temp_wiki) / "wiki" / "concepts" / "graph-b.md").write_text(page_b)
+
+    result = wiki_graph_neighbors(temp_wiki, "graph-a", depth=1)
+
+    assert result["status"] == "success"
+    node_ids = {node["page_id"] for node in result["nodes"]}
+    assert {"graph-a", "graph-b"} <= node_ids
+    assert any(edge["from"] == "graph-a" and edge["to"] == "graph-b" for edge in result["edges"])
+
+
+def test_wiki_graph_neighbors_missing_page_fails(temp_wiki):
+    """Graph query on nonexistent page should fail."""
+    result = wiki_graph_neighbors(temp_wiki, "missing-page", depth=1)
+    assert result["status"] == "failed"
+    assert result["reason"] == "page_not_found"
+
+
+# ============================================================================
+# wiki_ingest tests
+# ============================================================================
+
+def test_wiki_ingest_proposes_patch_from_source_file(temp_wiki):
+    """Ingest should create a workflow patch from source content."""
+    source_file = Path(temp_wiki) / "notes-source.md"
+    source_file.write_text("Ingested content body.", encoding="utf-8")
+
+    result = wiki_ingest(temp_wiki, str(source_file), "agent-ingest")
+
+    assert result["status"] == "success"
+    assert "patch_id" in result
+    assert result["requires_approval"] is True
+    assert result["affected_pages"] == ["notes-source"]
+
+
+def test_wiki_ingest_missing_source_fails(temp_wiki):
+    """Ingest on missing file should return source_not_found."""
+    result = wiki_ingest(temp_wiki, "missing-source.md", "agent-ingest")
+    assert result["status"] == "failed"
+    assert result["reason"] == "source_not_found"
+
+
+# ============================================================================
+# wiki_conflict tests
+# ============================================================================
+
+def test_wiki_list_conflicts_detects_page_overlap(temp_wiki):
+    """Conflict list should detect overlapping pending patches."""
+    wiki_propose_patch(
+        wiki_root=temp_wiki,
+        agent_id="agent-a",
+        operation="update",
+        pages=["test-page"],
+        diff="+ A",
+        confidence=0.9,
+        sources=["source-1"],
+    )
+    wiki_propose_patch(
+        wiki_root=temp_wiki,
+        agent_id="agent-b",
+        operation="update",
+        pages=["test-page"],
+        diff="+ B",
+        confidence=0.9,
+        sources=["source-2"],
+    )
+
+    result = wiki_list_conflicts(temp_wiki, status="pending")
+
+    assert result["status"] == "success"
+    assert result["total"] >= 1
+    assert all(conflict["status"] == "pending" for conflict in result["conflicts"])
+
+
+def test_wiki_resolve_conflict_marks_conflict_resolved(temp_wiki):
+    """Resolving conflict should persist resolution and change list filter result."""
+    wiki_propose_patch(
+        wiki_root=temp_wiki,
+        agent_id="agent-a",
+        operation="update",
+        pages=["test-page"],
+        diff="+ A",
+        confidence=0.9,
+        sources=["source-1"],
+    )
+    wiki_propose_patch(
+        wiki_root=temp_wiki,
+        agent_id="agent-b",
+        operation="update",
+        pages=["test-page"],
+        diff="+ B",
+        confidence=0.9,
+        sources=["source-2"],
+    )
+    pending_conflicts = wiki_list_conflicts(temp_wiki, status="pending")
+    conflict_id = pending_conflicts["conflicts"][0]["conflict_id"]
+
+    resolve_result = wiki_resolve_conflict(
+        wiki_root=temp_wiki,
+        conflict_id=conflict_id,
+        action="accept_patch_001",
+        resolver="human-alice",
+        reason="Patch A has better source quality",
+    )
+
+    assert resolve_result["status"] == "success"
+    assert resolve_result["conflict_id"] == conflict_id
+
+    resolved_conflicts = wiki_list_conflicts(temp_wiki, status="resolved")
+    assert any(conflict["conflict_id"] == conflict_id for conflict in resolved_conflicts["conflicts"])
+
+
+# ============================================================================
+# wiki_lint tests
+# ============================================================================
+
+def test_wiki_lint_all_detects_missing_frontmatter(temp_wiki):
+    """Standalone lint should report errors for malformed wiki files."""
+    bad_page = Path(temp_wiki) / "wiki" / "concepts" / "bad-page.md"
+    bad_page.write_text("no frontmatter here", encoding="utf-8")
+
+    result = wiki_lint(temp_wiki, scope="all")
+
+    assert result["status"] == "failed"
+    assert result["errors_count"] > 0
+    assert any(error["code"] == "missing_frontmatter" for error in result["errors"])
+
+
+def test_wiki_lint_invalid_scope_fails(temp_wiki):
+    """Invalid lint scope should return a typed failure."""
+    result = wiki_lint(temp_wiki, scope="invalid")
+    assert result["status"] == "failed"
+    assert result["reason"] == "invalid_scope"
+
+
+# ============================================================================
+# wiki_rollback tests
+# ============================================================================
+
+def test_wiki_rollback_reverts_change_commit(temp_wiki):
+    """Rollback should revert a commit identified by Change ID marker."""
+    change_id = "ch-test-rollback-001"
+    target_file = Path(temp_wiki) / "wiki" / "rollback-page.md"
+    target_file.write_text("before rollback\n", encoding="utf-8")
+    os.system(f"cd {temp_wiki} && git add wiki/rollback-page.md")
+    os.system(f"cd {temp_wiki} && git commit -m 'Apply update\n\nChange ID: {change_id}\n\n[human-alice🐾]'")
+
+    result = wiki_rollback(
+        wiki_root=temp_wiki,
+        change_id=change_id,
+        approved_by="human-alice",
+        reason="Regression detected",
+    )
+
+    assert result["status"] == "success"
+    assert result["original_change_id"] == change_id
+    assert "rollback_change_id" in result
+
+
+def test_wiki_rollback_missing_change_fails(temp_wiki):
+    """Rollback should fail when change_id is not found."""
+    result = wiki_rollback(
+        wiki_root=temp_wiki,
+        change_id="ch-not-exists",
+        approved_by="human-alice",
+        reason="No-op",
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "change_not_found"

@@ -52,14 +52,14 @@
 
 ### 测试覆盖
 
-**全量测试**: 62/62 passed
+**全量测试**: 73/73 passed
 - ACL: 5/5 ✓
 - Index Manager: 3/3 ✓
 - Lint: 5/5 ✓
 - Lock Concurrent: 2/2 ✓
 - Lock Manager: 4/4 ✓
-- MCP Server: 11/11 ✓
-- MCP Tools: 17/17 ✓
+- MCP Server: 12/12 ✓
+- MCP Tools: 27/27 ✓
 - Shadow Evaluator: 4/4 ✓
 - Workflow: 11/11 ✓
 
@@ -90,15 +90,28 @@
 - 只实现 initialize / tools/list / tools/call
 - 避免外部依赖
 
-## 未完成范围（v2 候选）
+## v1 完整能力（已全部实现）
 
-**6 个未实现工具**：
-- `wiki_graph_neighbors` - 知识图谱邻居查询
-- `wiki_ingest` - 源文档摄入
-- `wiki_list_conflicts` - 冲突列表
-- `wiki_resolve_conflict` - 冲突解决
-- `wiki_lint` - 独立 lint 工具
-- `wiki_rollback` - 回滚变更
+**11 个 MCP 工具**：
+- ✅ `wiki_read` - 读取页面
+- ✅ `wiki_status` - Wiki 状态统计
+- ✅ `wiki_search` - 全文搜索
+- ✅ `wiki_propose_patch` - 提议变更
+- ✅ `wiki_apply_patch` - 应用变更
+- ✅ `wiki_graph_neighbors` - 知识图谱邻居查询
+- ✅ `wiki_ingest` - 源文档摄入
+- ✅ `wiki_list_conflicts` - 冲突列表
+- ✅ `wiki_resolve_conflict` - 冲突解决
+- ✅ `wiki_lint` - 独立 lint 工具
+- ✅ `wiki_rollback` - 回滚变更
+
+**测试覆盖**：73/73 passed
+- MCP Tools: 27 个测试（覆盖所有 11 个工具）
+- MCP Server: 12 个测试（协议层 + 工具调用）
+- Workflow: 11 个测试
+- 其他模块: 23 个测试
+
+## 未完成范围（v2 候选）
 
 **端到端集成测试**：
 - Claude Desktop 客户端连接测试

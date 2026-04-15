@@ -92,7 +92,7 @@ def test_initialize_returns_capabilities(temp_wiki):
     assert resp["result"]["serverInfo"]["name"] == "micro-wiki-mcp"
 
 
-def test_tools_list_contains_all_day4_tools(temp_wiki):
+def test_tools_list_contains_all_v1_tools(temp_wiki):
     server = WikiMCPServer(temp_wiki)
     req = {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
     resp = server.handle_request(req)
@@ -100,7 +100,7 @@ def test_tools_list_contains_all_day4_tools(temp_wiki):
     tools = resp["result"]["tools"]
     names = {t["name"] for t in tools}
     assert names == set(TOOL_SPECS.keys())
-    assert len(names) == 5
+    assert len(names) == len(TOOL_SPECS)
 
 
 def test_tools_call_wiki_read_success(temp_wiki):
@@ -183,7 +183,7 @@ def test_serve_stdio_handles_parse_error_and_valid_request(temp_wiki):
 
     assert first_response["error"]["code"] == -32700
     assert "result" in second_response
-    assert len(second_response["result"]["tools"]) == 5
+    assert len(second_response["result"]["tools"]) == len(TOOL_SPECS)
 
 
 def test_serve_stdio_with_content_length_framing(temp_wiki):
@@ -219,7 +219,7 @@ def test_serve_stdio_with_content_length_framing(temp_wiki):
     assert response["jsonrpc"] == "2.0"
     assert response["id"] == 7
     assert "result" in response
-    assert len(response["result"]["tools"]) == 5
+    assert len(response["result"]["tools"]) == len(TOOL_SPECS)
 
 
 def test_tools_call_validates_minimum_constraint(temp_wiki):
@@ -316,3 +316,49 @@ def test_tools_call_rejects_bool_as_integer(temp_wiki):
     assert resp["error"]["code"] == -32602
     assert "limit" in resp["error"]["message"]
     assert "integer" in resp["error"]["message"]
+
+
+def test_tools_call_wiki_graph_neighbors_success(temp_wiki):
+    """Server should dispatch new wiki_graph_neighbors tool."""
+    # Add linked page to build a small graph.
+    (Path(temp_wiki) / "wiki" / "concepts" / "peer-page.md").write_text(
+        """---
+page_id: peer-page
+title: Peer Page
+updated: 1234567890.0
+confidence: 0.95
+source_refs: [source-1]
+---
+Backlink [[test-page]].
+""",
+        encoding="utf-8",
+    )
+    # Update test-page with a link to peer-page.
+    (Path(temp_wiki) / "wiki" / "concepts" / "test-page.md").write_text(
+        """---
+page_id: test-page
+title: Test Page
+updated: 1234567890.0
+confidence: 0.95
+source_refs: [source-1]
+---
+Link to [[peer-page]].
+""",
+        encoding="utf-8",
+    )
+
+    server = WikiMCPServer(temp_wiki)
+    req = {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {"name": "wiki_graph_neighbors", "arguments": {"page_id": "test-page", "depth": 1}},
+    }
+    resp = server.handle_request(req)
+
+    assert "result" in resp
+    structured = resp["result"]["structuredContent"]
+    assert structured["status"] == "success"
+    node_ids = {node["page_id"] for node in structured["nodes"]}
+    assert "test-page" in node_ids
+    assert "peer-page" in node_ids

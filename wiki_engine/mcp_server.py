@@ -20,8 +20,14 @@ from typing import Any, Callable
 
 from wiki_engine.mcp_tools import (
     wiki_apply_patch,
+    wiki_graph_neighbors,
+    wiki_ingest,
+    wiki_lint,
+    wiki_list_conflicts,
     wiki_propose_patch,
     wiki_read,
+    wiki_resolve_conflict,
+    wiki_rollback,
     wiki_search,
     wiki_status,
 )
@@ -112,6 +118,81 @@ TOOL_SPECS: dict[str, ToolSpec] = {
             "additionalProperties": False,
         },
     ),
+    "wiki_graph_neighbors": ToolSpec(
+        name="wiki_graph_neighbors",
+        description="Get neighboring pages in the wiki graph.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "page_id": {"type": "string"},
+                "depth": {"type": "integer", "minimum": 1},
+            },
+            "required": ["page_id"],
+            "additionalProperties": False,
+        },
+    ),
+    "wiki_ingest": ToolSpec(
+        name="wiki_ingest",
+        description="Ingest a source document and propose a patch.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "source_path": {"type": "string"},
+                "agent_id": {"type": "string"},
+            },
+            "required": ["source_path", "agent_id"],
+            "additionalProperties": False,
+        },
+    ),
+    "wiki_list_conflicts": ToolSpec(
+        name="wiki_list_conflicts",
+        description="List conflict records derived from pending patches.",
+        input_schema={
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": [],
+            "additionalProperties": False,
+        },
+    ),
+    "wiki_resolve_conflict": ToolSpec(
+        name="wiki_resolve_conflict",
+        description="Resolve a conflict and persist resolution record.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "conflict_id": {"type": "string"},
+                "action": {"type": "string"},
+                "resolver": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["conflict_id", "action", "resolver", "reason"],
+            "additionalProperties": False,
+        },
+    ),
+    "wiki_lint": ToolSpec(
+        name="wiki_lint",
+        description="Run lint checks for all/pending/recent wiki scope.",
+        input_schema={
+            "type": "object",
+            "properties": {"scope": {"type": "string"}},
+            "required": [],
+            "additionalProperties": False,
+        },
+    ),
+    "wiki_rollback": ToolSpec(
+        name="wiki_rollback",
+        description="Rollback a change by reverting its git commit.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "change_id": {"type": "string"},
+                "approved_by": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["change_id", "approved_by", "reason"],
+            "additionalProperties": False,
+        },
+    ),
 }
 
 
@@ -126,6 +207,12 @@ class WikiMCPServer:
             "wiki_search": wiki_search,
             "wiki_propose_patch": wiki_propose_patch,
             "wiki_apply_patch": wiki_apply_patch,
+            "wiki_graph_neighbors": wiki_graph_neighbors,
+            "wiki_ingest": wiki_ingest,
+            "wiki_list_conflicts": wiki_list_conflicts,
+            "wiki_resolve_conflict": wiki_resolve_conflict,
+            "wiki_lint": wiki_lint,
+            "wiki_rollback": wiki_rollback,
         }
 
     def handle_request(self, request: dict[str, Any]) -> dict[str, Any]:
