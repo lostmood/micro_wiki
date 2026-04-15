@@ -82,6 +82,7 @@ TOOL_SPECS: dict[str, ToolSpec] = {
             "properties": {
                 "query": {"type": "string"},
                 "limit": {"type": "integer", "minimum": 1},
+                "scope": {"type": "string"},  # Reserved for future use
             },
             "required": ["query"],
             "additionalProperties": False,
@@ -186,10 +187,11 @@ TOOL_SPECS: dict[str, ToolSpec] = {
             "type": "object",
             "properties": {
                 "change_id": {"type": "string"},
-                "approved_by": {"type": "string"},
+                "signed_approval": {"type": "object"},
+                "expected_base_commit": {"type": "string"},
                 "reason": {"type": "string"},
             },
-            "required": ["change_id", "approved_by", "reason"],
+            "required": ["change_id", "signed_approval", "expected_base_commit", "reason"],
             "additionalProperties": False,
         },
     ),

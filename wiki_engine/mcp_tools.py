@@ -277,7 +277,7 @@ def wiki_status(wiki_root: str) -> Dict[str, Any]:
     }
 
 
-def wiki_search(wiki_root: str, query: str, limit: int = 10) -> Dict[str, Any]:
+def wiki_search(wiki_root: str, query: str, limit: int = 10, scope: str = None) -> Dict[str, Any]:
     """
     Search wiki pages by query.
 
@@ -285,6 +285,7 @@ def wiki_search(wiki_root: str, query: str, limit: int = 10) -> Dict[str, Any]:
         wiki_root: Path to wiki root directory
         query: Search query string
         limit: Maximum number of results
+        scope: Search scope filter (RESERVED for v2, currently unsupported)
 
     Returns:
         {
@@ -297,18 +298,28 @@ def wiki_search(wiki_root: str, query: str, limit: int = 10) -> Dict[str, Any]:
                     "relevance_score": float
                 }
             ],
-            "total": int
+            "total": int,
+            "warnings": [str]  # Optional, present if scope is provided
         }
     """
+    warnings = []
+
+    # Check for unsupported scope parameter
+    if scope is not None:
+        warnings.append(f"unsupported_scope: scope parameter '{scope}' is reserved for v2 and currently ignored")
+
     root = Path(wiki_root)
     wiki_dir = root / "wiki"
 
     if not wiki_dir.exists():
-        return {
+        result = {
             "status": "success",
             "results": [],
             "total": 0
         }
+        if warnings:
+            result["warnings"] = warnings
+        return result
 
     results = []
     query_lower = query.lower()
@@ -378,11 +389,14 @@ def wiki_search(wiki_root: str, query: str, limit: int = 10) -> Dict[str, Any]:
     results.sort(key=lambda x: x["relevance_score"], reverse=True)
     results = results[:limit]
 
-    return {
+    result = {
         "status": "success",
         "results": results,
         "total": len(results)
     }
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 def wiki_propose_patch(
@@ -639,7 +653,47 @@ def wiki_resolve_conflict(
 ) -> Dict[str, Any]:
     """
     Resolve a pending conflict and persist an audit record.
+
+    Security classification: NON-CRITICAL METADATA WRITE
+    - Does NOT modify wiki content directly
+    - Only writes audit log to .audit/conflict_resolutions.jsonl
+    - Minimal defense: non-empty validation on resolver/reason
+
+    Args:
+        wiki_root: Path to wiki root
+        conflict_id: ID of the conflict to resolve
+        action: Resolution action (e.g., "accept", "reject", "merge")
+        resolver: ID of the resolver (must be non-empty)
+        reason: Reason for resolution (must be non-empty)
+
+    Returns:
+        Success: {
+            "status": "success",
+            "change_id": str,
+            "resolution": str,
+            "conflict_id": str
+        }
+
+        Failure: {
+            "status": "failed",
+            "reason": "conflict_not_found" | "invalid_resolver" | "invalid_reason",
+            "message": str
+        }
     """
+    # Minimal defense: non-empty validation
+    if not resolver or not resolver.strip():
+        return {
+            "status": "failed",
+            "reason": "invalid_resolver",
+            "message": "resolver must be non-empty",
+        }
+    if not reason or not reason.strip():
+        return {
+            "status": "failed",
+            "reason": "invalid_reason",
+            "message": "reason must be non-empty",
+        }
+
     conflicts_result = wiki_list_conflicts(wiki_root, status="all")
     if conflicts_result.get("status") != "success":
         return conflicts_result
@@ -663,8 +717,8 @@ def wiki_resolve_conflict(
     record = {
         "conflict_id": conflict_id,
         "action": action,
-        "resolver": resolver,
-        "reason": reason,
+        "resolver": resolver.strip(),
+        "reason": reason.strip(),
         "resolved_at": time.time(),
         "status": "resolved",
     }
@@ -764,26 +818,98 @@ def wiki_lint(wiki_root: str, scope: str = "all") -> Dict[str, Any]:
 def wiki_rollback(
     wiki_root: str,
     change_id: str,
-    approved_by: str,
+    signed_approval: Dict[str, Any],
+    expected_base_commit: str,
     reason: str,
 ) -> Dict[str, Any]:
     """
     Roll back an applied change by reverting its git commit.
+
+    Security model: Same as wiki_apply_patch (signature + nonce + TTL + TOCTOU).
+
+    Args:
+        wiki_root: Path to wiki root
+        change_id: Change ID to rollback (must match signed_approval.patch_id)
+        signed_approval: Signed approval with patch_id, approver_id, nonce, timestamp, signature
+        expected_base_commit: Expected current commit (TOCTOU protection)
+        reason: Reason for rollback
+
+    Returns:
+        Success: {
+            "status": "success",
+            "rollback_change_id": str,
+            "original_change_id": str,
+            "rolled_back_at": float
+        }
+
+        Failure: {
+            "status": "failed",
+            "reason": "signature_verification_failed" | "base_commit_changed" |
+                     "change_not_found" | "rollback_failed" | "patch_id_mismatch",
+            "message": str
+        }
     """
+    # 1. Verify signed_approval.patch_id matches change_id (audit binding)
+    if signed_approval.get("patch_id") != change_id:
+        return {
+            "status": "failed",
+            "reason": "patch_id_mismatch",
+            "message": f"signed_approval.patch_id '{signed_approval.get('patch_id')}' does not match change_id '{change_id}'",
+        }
+
+    # 2. Verify signature (includes nonce + TTL check)
     acl = ApprovalACL(f"{wiki_root}/.schema/approvers.yaml")
-    if not acl.verify_approver(approved_by):
+    sig_valid, sig_reason = acl.verify_signature(signed_approval)
+    if not sig_valid:
+        return {
+            "status": "failed",
+            "reason": f"signature_verification_failed:{sig_reason}",
+            "message": f"Signature verification failed: {sig_reason}",
+        }
+
+    approver_id = signed_approval["approver_id"]
+
+    # 3. Verify approver identity
+    if not acl.verify_approver(approver_id):
         return {
             "status": "failed",
             "reason": "unauthorized_approver",
-            "message": f"Approver '{approved_by}' is not authorized",
+            "message": f"Approver '{approver_id}' is not authorized",
         }
-    if not acl.check_permission(approved_by, "rollback"):
+
+    # 4. Check permission (rollback is a write operation, use "update" permission)
+    if not acl.check_permission(approver_id, "update"):
         return {
             "status": "failed",
             "reason": "insufficient_permission",
-            "message": f"Approver '{approved_by}' cannot approve 'rollback'",
+            "message": f"Approver '{approver_id}' cannot approve rollback operations",
         }
 
+    # 5. Verify signature's expected_base_commit matches parameter
+    if signed_approval["expected_base_commit"] != expected_base_commit:
+        return {
+            "status": "failed",
+            "reason": "signature_base_commit_mismatch",
+            "message": "Signature's expected_base_commit does not match provided value",
+        }
+
+    # 6. TOCTOU protection: verify expected_base_commit matches current
+    current_commit_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=wiki_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    current_commit = current_commit_result.stdout.strip()
+    if current_commit != expected_base_commit:
+        return {
+            "status": "failed",
+            "reason": "base_commit_changed",
+            "message": f"Base commit changed: expected {expected_base_commit}, got {current_commit}",
+        }
+
+    # 7. Find target commit by change_id
     commit_lookup = subprocess.run(
         ["git", "log", "--all", "--grep", f"Change ID: {change_id}", "--format=%H", "-n", "1"],
         cwd=wiki_root,
@@ -799,6 +925,7 @@ def wiki_rollback(
             "message": f"Change '{change_id}' was not found in git history",
         }
 
+    # 8. Revert the commit (with failure cleanup)
     revert_result = subprocess.run(
         ["git", "revert", "--no-edit", target_commit],
         cwd=wiki_root,
@@ -807,12 +934,20 @@ def wiki_rollback(
         check=False,
     )
     if revert_result.returncode != 0:
+        # Cleanup: abort revert to restore clean state
+        subprocess.run(
+            ["git", "revert", "--abort"],
+            cwd=wiki_root,
+            capture_output=True,
+            check=False,
+        )
         return {
             "status": "failed",
             "reason": "rollback_failed",
             "message": revert_result.stderr.strip() or "git revert failed",
         }
 
+    # 9. Get new commit hash
     new_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=wiki_root,
@@ -821,6 +956,7 @@ def wiki_rollback(
         check=True,
     ).stdout.strip()
 
+    # 10. Record audit log
     root = Path(wiki_root)
     audit_dir = root / ".audit"
     audit_dir.mkdir(parents=True, exist_ok=True)
@@ -831,7 +967,8 @@ def wiki_rollback(
         "original_change_id": change_id,
         "target_commit": target_commit,
         "rollback_commit": new_commit,
-        "approved_by": approved_by,
+        "approver_id": signed_approval["approver_id"],
+        "nonce": signed_approval["nonce"],
         "reason": reason,
         "rolled_back_at": time.time(),
     }

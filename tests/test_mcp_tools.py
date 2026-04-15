@@ -9,7 +9,9 @@ Tests verify:
 
 import os
 import json
+import subprocess
 import hashlib
+import yaml
 from pathlib import Path
 import pytest
 
@@ -26,6 +28,7 @@ from wiki_engine.mcp_tools import (
     wiki_lint,
     wiki_rollback,
 )
+from wiki_engine.acl import ApprovalACL
 
 
 @pytest.fixture
@@ -253,6 +256,17 @@ def test_wiki_search_no_match_returns_empty(temp_wiki):
     assert result["status"] == "success"
     assert result["total"] == 0
     assert result["results"] == []
+
+
+def test_wiki_search_unsupported_scope_returns_warning(temp_wiki):
+    """Test wiki_search with unsupported scope returns warning."""
+    result = wiki_search(temp_wiki, "test", limit=10, scope="title_only")
+
+    assert result["status"] == "success"
+    assert "warnings" in result
+    assert len(result["warnings"]) == 1
+    assert "unsupported_scope" in result["warnings"][0]
+    assert "title_only" in result["warnings"][0]
 
 
 def test_wiki_search_respects_limit(temp_wiki):
@@ -625,6 +639,74 @@ def test_wiki_resolve_conflict_marks_conflict_resolved(temp_wiki):
     assert any(conflict["conflict_id"] == conflict_id for conflict in resolved_conflicts["conflicts"])
 
 
+def test_wiki_resolve_conflict_rejects_empty_resolver(temp_wiki):
+    """Resolve conflict should reject empty resolver (minimal defense)."""
+    wiki_propose_patch(
+        wiki_root=temp_wiki,
+        agent_id="agent-a",
+        operation="update",
+        pages=["test-page"],
+        diff="+ A",
+        confidence=0.9,
+        sources=["source-1"],
+    )
+    wiki_propose_patch(
+        wiki_root=temp_wiki,
+        agent_id="agent-b",
+        operation="update",
+        pages=["test-page"],
+        diff="+ B",
+        confidence=0.9,
+        sources=["source-2"],
+    )
+    pending_conflicts = wiki_list_conflicts(temp_wiki, status="pending")
+    conflict_id = pending_conflicts["conflicts"][0]["conflict_id"]
+
+    result = wiki_resolve_conflict(
+        wiki_root=temp_wiki,
+        conflict_id=conflict_id,
+        action="accept",
+        resolver="",  # Empty resolver
+        reason="Valid reason",
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "invalid_resolver"
+
+
+def test_wiki_resolve_conflict_rejects_empty_reason(temp_wiki):
+    """Resolve conflict should reject empty reason (minimal defense)."""
+    wiki_propose_patch(
+        wiki_root=temp_wiki,
+        agent_id="agent-a",
+        operation="update",
+        pages=["test-page"],
+        diff="+ A",
+        confidence=0.9,
+        sources=["source-1"],
+    )
+    wiki_propose_patch(
+        wiki_root=temp_wiki,
+        agent_id="agent-b",
+        operation="update",
+        pages=["test-page"],
+        diff="+ B",
+        confidence=0.9,
+        sources=["source-2"],
+    )
+    pending_conflicts = wiki_list_conflicts(temp_wiki, status="pending")
+    conflict_id = pending_conflicts["conflicts"][0]["conflict_id"]
+
+    result = wiki_resolve_conflict(
+        wiki_root=temp_wiki,
+        conflict_id=conflict_id,
+        action="accept",
+        resolver="human-alice",
+        reason="   ",  # Whitespace-only reason
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "invalid_reason"
+
+
 # ============================================================================
 # wiki_lint tests
 # ============================================================================
@@ -660,10 +742,28 @@ def test_wiki_rollback_reverts_change_commit(temp_wiki):
     os.system(f"cd {temp_wiki} && git add wiki/rollback-page.md")
     os.system(f"cd {temp_wiki} && git commit -m 'Apply update\n\nChange ID: {change_id}\n\n[human-alice🐾]'")
 
+    # Get current commit for TOCTOU protection
+    expected_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=temp_wiki,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    # Generate signed approval
+    acl = ApprovalACL(f"{temp_wiki}/.schema/approvers.yaml")
+    signed_approval = acl.sign_approval(
+        approver_id="human-alice",
+        patch_id=change_id,
+        expected_base_commit=expected_base,
+    )
+
     result = wiki_rollback(
         wiki_root=temp_wiki,
         change_id=change_id,
-        approved_by="human-alice",
+        signed_approval=signed_approval,
+        expected_base_commit=expected_base,
         reason="Regression detected",
     )
 
@@ -674,11 +774,238 @@ def test_wiki_rollback_reverts_change_commit(temp_wiki):
 
 def test_wiki_rollback_missing_change_fails(temp_wiki):
     """Rollback should fail when change_id is not found."""
+    expected_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=temp_wiki,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    acl = ApprovalACL(f"{temp_wiki}/.schema/approvers.yaml")
+    signed_approval = acl.sign_approval(
+        approver_id="human-alice",
+        patch_id="ch-not-exists",
+        expected_base_commit=expected_base,
+    )
+
     result = wiki_rollback(
         wiki_root=temp_wiki,
         change_id="ch-not-exists",
-        approved_by="human-alice",
+        signed_approval=signed_approval,
+        expected_base_commit=expected_base,
         reason="No-op",
     )
     assert result["status"] == "failed"
     assert result["reason"] == "change_not_found"
+
+
+def test_wiki_rollback_rejects_patch_id_mismatch(temp_wiki):
+    """Rollback should reject when signed_approval.patch_id != change_id."""
+    change_id = "ch-rollback-002"
+    target_file = Path(temp_wiki) / "wiki" / "rollback-page2.md"
+    target_file.write_text("content\n", encoding="utf-8")
+    os.system(f"cd {temp_wiki} && git add wiki/rollback-page2.md")
+    os.system(f"cd {temp_wiki} && git commit -m 'Apply\n\nChange ID: {change_id}\n\n[human-alice🐾]'")
+
+    expected_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=temp_wiki,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    acl = ApprovalACL(f"{temp_wiki}/.schema/approvers.yaml")
+    signed_approval = acl.sign_approval(
+        approver_id="human-alice",
+        patch_id="ch-different-id",  # Mismatch
+        expected_base_commit=expected_base,
+    )
+
+    result = wiki_rollback(
+        wiki_root=temp_wiki,
+        change_id=change_id,
+        signed_approval=signed_approval,
+        expected_base_commit=expected_base,
+        reason="Test",
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "patch_id_mismatch"
+
+
+def test_wiki_rollback_rejects_signature_replay(temp_wiki):
+    """Rollback should reject replayed signature (nonce reuse)."""
+    change_id = "ch-rollback-003"
+    target_file = Path(temp_wiki) / "wiki" / "rollback-page3.md"
+    target_file.write_text("content\n", encoding="utf-8")
+    os.system(f"cd {temp_wiki} && git add wiki/rollback-page3.md")
+    os.system(f"cd {temp_wiki} && git commit -m 'Apply\n\nChange ID: {change_id}\n\n[human-alice🐾]'")
+
+    expected_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=temp_wiki,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    acl = ApprovalACL(f"{temp_wiki}/.schema/approvers.yaml")
+    signed_approval = acl.sign_approval(
+        approver_id="human-alice",
+        patch_id=change_id,
+        expected_base_commit=expected_base,
+    )
+
+    # First rollback succeeds
+    result1 = wiki_rollback(
+        wiki_root=temp_wiki,
+        change_id=change_id,
+        signed_approval=signed_approval,
+        expected_base_commit=expected_base,
+        reason="First rollback",
+    )
+    assert result1["status"] == "success"
+
+    # Replay same signature should fail (nonce already used)
+    new_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=temp_wiki,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    result2 = wiki_rollback(
+        wiki_root=temp_wiki,
+        change_id=change_id,
+        signed_approval=signed_approval,  # Reused signature
+        expected_base_commit=new_base,
+        reason="Replay attempt",
+    )
+    assert result2["status"] == "failed"
+    assert "signature_verification_failed" in result2["reason"]
+
+
+def test_wiki_rollback_detects_base_commit_change(temp_wiki):
+    """Rollback should detect TOCTOU when base commit changes."""
+    change_id = "ch-rollback-004"
+    target_file = Path(temp_wiki) / "wiki" / "rollback-page4.md"
+    target_file.write_text("content\n", encoding="utf-8")
+    os.system(f"cd {temp_wiki} && git add wiki/rollback-page4.md")
+    os.system(f"cd {temp_wiki} && git commit -m 'Apply\n\nChange ID: {change_id}\n\n[human-alice🐾]'")
+
+    old_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=temp_wiki,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    # Simulate concurrent change
+    dummy_file = Path(temp_wiki) / "wiki" / "concurrent-change.md"
+    dummy_file.write_text("concurrent\n", encoding="utf-8")
+    os.system(f"cd {temp_wiki} && git add wiki/concurrent-change.md")
+    os.system(f"cd {temp_wiki} && git commit -m 'Concurrent change'")
+
+    acl = ApprovalACL(f"{temp_wiki}/.schema/approvers.yaml")
+    signed_approval = acl.sign_approval(
+        approver_id="human-alice",
+        patch_id=change_id,
+        expected_base_commit=old_base,
+    )
+
+    result = wiki_rollback(
+        wiki_root=temp_wiki,
+        change_id=change_id,
+        signed_approval=signed_approval,
+        expected_base_commit=old_base,  # Stale base
+        reason="TOCTOU test",
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "base_commit_changed"
+
+
+def test_wiki_rollback_rejects_unauthorized_approver(temp_wiki):
+    """Rollback should reject unauthorized approver."""
+    change_id = "ch-rollback-005"
+    target_file = Path(temp_wiki) / "wiki" / "rollback-page5.md"
+    target_file.write_text("content\n", encoding="utf-8")
+    os.system(f"cd {temp_wiki} && git add wiki/rollback-page5.md")
+    os.system(f"cd {temp_wiki} && git commit -m 'Apply\n\nChange ID: {change_id}\n\n[human-alice🐾]'")
+
+    expected_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=temp_wiki,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    # Add unauthorized approver to approvers.yaml temporarily
+    approvers_file = Path(temp_wiki) / ".schema" / "approvers.yaml"
+    approvers_config = yaml.safe_load(approvers_file.read_text())
+    approvers_config["authorized_approvers"].append({
+        "id": "human-unauthorized",
+        "name": "Unauthorized User",
+        "role": "guest",
+        "auth_method": "session_identity",
+        "permissions": []  # No permissions
+    })
+    approvers_file.write_text(yaml.dump(approvers_config))
+
+    # Create valid signature with unauthorized approver
+    acl = ApprovalACL(f"{temp_wiki}/.schema/approvers.yaml")
+    signed_approval = acl.sign_approval(
+        approver_id="human-unauthorized",
+        patch_id=change_id,
+        expected_base_commit=expected_base,
+    )
+
+    result = wiki_rollback(
+        wiki_root=temp_wiki,
+        change_id=change_id,
+        signed_approval=signed_approval,
+        expected_base_commit=expected_base,
+        reason="Test unauthorized",
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "insufficient_permission"
+
+
+def test_wiki_rollback_rejects_signature_base_commit_mismatch(temp_wiki):
+    """Rollback should reject when signed_approval.expected_base_commit != parameter."""
+    change_id = "ch-rollback-006"
+    target_file = Path(temp_wiki) / "wiki" / "rollback-page6.md"
+    target_file.write_text("content\n", encoding="utf-8")
+    os.system(f"cd {temp_wiki} && git add wiki/rollback-page6.md")
+    os.system(f"cd {temp_wiki} && git commit -m 'Apply\n\nChange ID: {change_id}\n\n[human-alice🐾]'")
+
+    expected_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=temp_wiki,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    acl = ApprovalACL(f"{temp_wiki}/.schema/approvers.yaml")
+    signed_approval = acl.sign_approval(
+        approver_id="human-alice",
+        patch_id=change_id,
+        expected_base_commit=expected_base,
+    )
+
+    # Pass different expected_base_commit parameter (mismatch with signature)
+    fake_base = "0" * 40
+
+    result = wiki_rollback(
+        wiki_root=temp_wiki,
+        change_id=change_id,
+        signed_approval=signed_approval,
+        expected_base_commit=fake_base,  # Mismatch
+        reason="Test mismatch",
+    )
+    assert result["status"] == "failed"
+    assert result["reason"] == "signature_base_commit_mismatch"
