@@ -154,27 +154,26 @@ def wiki_ingest(source_path: str, agent_id: str) -> dict
     "affected_pages": ["document"],
     "source_path": "/path/to/document.txt",
     "requires_approval": true,
-    "confidence": 0.9
+    "confidence": 0.9,
+    "lint_status": "passed"  # or "failed" if lint errors detected
+    # If lint_status is "failed", lint_errors will be present
 }
 ```
 
-**Error Response:**
+**Error Responses:**
 ```python
+# Source file not found
 {
     "status": "failed",
-    "reason": "lint_failed",
-    "errors": [
-        {
-            "code": "missing_source_refs",
-            "file": "wiki/concepts/transformer.md",
-            "message": "Field 'source_refs' must be a non-empty list."
-        },
-        {
-            "code": "broken_wikilink",
-            "file": "wiki/concepts/transformer.md",
-            "message": "Wikilink target 'concept-attention' does not exist."
-        }
-    ]
+    "reason": "source_not_found",
+    "message": "Source file '/path/to/document.txt' does not exist"
+}
+
+# Empty source file
+{
+    "status": "failed",
+    "reason": "empty_source",
+    "message": "Source file '/path/to/document.txt' is empty"
 }
 ```
 
@@ -210,16 +209,20 @@ def wiki_propose_patch(
     "requires_approval": true,
     "confidence": 0.95,
     "lint_status": "passed"  # or "failed" if lint errors detected
-    # Note: shadow_eval is NOT included in response (hidden by default per approval_policy.yaml)
-    # Only visible in diagnostic mode or post-analysis
+    # Note: Even if lint_status is "failed", status is still "success" (patch is saved to .pending/)
+    # lint_errors will be present if lint_status is "failed"
+    # shadow_eval is NOT included in response (hidden by default per approval_policy.yaml)
 }
 ```
 
-**Error Response (lint failed):**
+**Example with lint errors:**
 ```python
 {
-    "status": "failed",
-    "reason": "lint_failed",
+    "status": "success",
+    "patch_id": "patch-20260414-035500",
+    "requires_approval": true,
+    "confidence": 0.95,
+    "lint_status": "failed",
     "lint_errors": [
         {
             "code": "missing_source_refs",
@@ -419,7 +422,7 @@ Rollback a change (requires approval).
 ```python
 def wiki_rollback(
     change_id: str,
-    signed_approval: str,
+    signed_approval: Dict[str, Any],
     expected_base_commit: str,
     reason: str
 ) -> dict
@@ -427,7 +430,7 @@ def wiki_rollback(
 
 **Parameters:**
 - `change_id`: ID of the change to rollback
-- `signed_approval`: Signed approval token (from ACL)
+- `signed_approval`: Signed approval object (from ACL, same structure as wiki_apply_patch)
 - `expected_base_commit`: Expected git commit hash (TOCTOU protection)
 - `reason`: Reason for rollback
 
@@ -447,31 +450,28 @@ def wiki_rollback(
 {
     "status": "failed",
     "reason": "patch_id_mismatch",
-    "expected": "patch-001",
-    "actual": "patch-002"
+    "message": "signed_approval.patch_id 'patch-002' does not match change_id 'patch-001'"
 }
 
 # Signature base commit mismatch
 {
     "status": "failed",
     "reason": "signature_base_commit_mismatch",
-    "expected": "abc123...",
-    "actual": "def456..."
+    "message": "Signature's expected_base_commit does not match provided value"
 }
 
 # Base commit changed (TOCTOU)
 {
     "status": "failed",
     "reason": "base_commit_changed",
-    "expected": "abc123...",
-    "actual": "def456..."
+    "message": "Base commit changed: expected abc123..., got def456..."
 }
 
 # Insufficient permission
 {
     "status": "failed",
     "reason": "insufficient_permission",
-    "message": "Approver 'user-x' cannot approve 'rollback'"
+    "message": "Approver 'user-x' cannot approve rollback operations"
 }
 ```
 
