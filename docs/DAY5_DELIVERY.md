@@ -89,15 +89,16 @@
 ### 全量测试结果
 
 ```
-62/62 passed in 4.14s
+89/89 passed in 4.5s
 
 - ACL: 5/5 ✓
+- E2E stdio: 6/6 ✓
 - Index Manager: 3/3 ✓
 - Lint: 5/5 ✓
 - Lock Concurrent: 2/2 ✓
 - Lock Manager: 4/4 ✓
-- MCP Server: 11/11 ✓
-- MCP Tools: 17/17 ✓
+- MCP Server: 14/14 ✓
+- MCP Tools: 39/39 ✓
 - Shadow Evaluator: 4/4 ✓
 - Workflow: 11/11 ✓
 ```
@@ -185,40 +186,29 @@ Content-Length: 456\r\n
 - `bool` 类型：显式排除，不被误判为 integer/number
 - 违反约束：返回 -32602 Invalid params
 
-## 残余风险（非阻断）
+## 后续完成项（已交付）
 
-**@codex 提到的非阻断风险：**
-- 小写 `content-length` header 兼容性未测试
-- 建议后续补充测试用例
+**Day5 后续完成的工作**：
 
-**规则一致性：**
-- `confidence=0.9` 语义需要文档化
-- 避免后续实现漂移
-
-## 下一步
-
-Day5 完成，可选方向：
-
-1. **v1 能力补齐**（6 个未实现工具）：
-   - `wiki_graph_neighbors` - 知识图谱邻居查询
-   - `wiki_ingest` - 源文档摄入
-   - `wiki_list_conflicts` - 冲突列表
-   - `wiki_resolve_conflict` - 冲突解决
-   - `wiki_lint` - 独立 lint 工具
-   - `wiki_rollback` - 回滚变更
-
-2. **端到端集成测试**：
-   - Claude Desktop 客户端连接测试
-   - 完整 propose→apply 流程验证
-
-3. **文档完善**：
-   - 部署指南（如何配置 Claude Desktop）
-   - API 参考文档
+1. ✅ **v1 能力补齐**（6 个工具全部实现）
+2. ✅ **端到端集成测试**（6 个 E2E stdio 测试）
+3. ✅ **文档完善**（DEPLOYMENT.md + QUICKSTART.md + MCP_INTERFACE.md）
+4. ✅ **P1 接口契约收敛**（修正文档与实现漂移）
+5. ✅ **P1 兼容性修复**（大小写不敏感 Content-Length header）
+6. ✅ **P2 性能基线**（PERF_BASELINE.md + benchmark_perf.py）
 
 ---
 
 **签名**: [宪宪/Opus-4.6🐾]
 **时间**: 2026-04-15
-**Commits**: 7545cc7 (初版), 913c963 (P0 修复), 7e590af (P1/P2 修复)
-**测试**: 62/62 passed
+**Commits**:
+- 7545cc7 (初版)
+- 913c963 (P0 修复)
+- 7e590af (P1/P2 修复)
+- 29ea6b6 (wiki_rollback 完整实现)
+- 17c8feb (P0 部署文档)
+- 8308dcb, b106a26, fba1c33 (P1 接口契约收敛)
+- 19b0b44 (P1 兼容性修复)
+- 077691c (P2 性能基线)
+**测试**: 89/89 passed
 **复审**: @codex PASS

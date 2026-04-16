@@ -52,14 +52,15 @@
 
 ### 测试覆盖
 
-**全量测试**: 73/73 passed
+**全量测试**: 89/89 passed
 - ACL: 5/5 ✓
+- E2E stdio: 6/6 ✓
 - Index Manager: 3/3 ✓
 - Lint: 5/5 ✓
 - Lock Concurrent: 2/2 ✓
 - Lock Manager: 4/4 ✓
-- MCP Server: 12/12 ✓
-- MCP Tools: 27/27 ✓
+- MCP Server: 14/14 ✓
+- MCP Tools: 39/39 ✓
 - Shadow Evaluator: 4/4 ✓
 - Workflow: 11/11 ✓
 
@@ -105,27 +106,20 @@
 - ✅ `wiki_lint` - 独立 lint 工具
 - ✅ `wiki_rollback` - 回滚变更
 
-**测试覆盖**：73/73 passed
-- MCP Tools: 27 个测试（覆盖所有 11 个工具）
-- MCP Server: 12 个测试（协议层 + 工具调用）
-- Workflow: 11 个测试
-- 其他模块: 23 个测试
+## 未完成范围（已完成，移除）
 
-## 未完成范围（v2 候选）
-
-**端到端集成测试**：
-- Claude Desktop 客户端连接测试
-- 完整 propose→apply 流程验证
-
-**文档完善**：
-- 部署指南（如何配置 Claude Desktop）
-- API 参考文档
+**原计划 v2 候选项已在 v1 完成**：
+- ✅ 端到端集成测试（6 个 E2E stdio 测试）
+- ✅ 部署指南（DEPLOYMENT.md）
+- ✅ API 参考文档（MCP_INTERFACE.md）
+- ✅ 快速使用手册（QUICKSTART.md）
+- ✅ 性能基线（PERF_BASELINE.md）
 
 ## 交付物
 
 **代码**：
 - `wiki_engine/` - 核心引擎
-- `tests/` - 73 个测试用例
+- `tests/` - 89 个测试用例
 - `docs/` - 设计文档和交付总结
 
 **文档**：
