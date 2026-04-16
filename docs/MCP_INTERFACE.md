@@ -8,6 +8,7 @@ All interfaces are frozen for v1 - changes require version bump.
 ## Core Principles
 
 1. **Human approval required**: All write operations require human approval (v1)
+   - **Exception**: `wiki_resolve_conflict` is classified as NON-CRITICAL METADATA WRITE and does NOT require signed approval (only writes audit log, does not modify wiki content)
 2. **Atomic operations**: All state changes are atomic with TOCTOU protection
 3. **Audit trail**: All operations are logged with signatures
 4. **Anti-replay**: All approvals use nonce + TTL to prevent replay attacks
@@ -65,6 +66,7 @@ def wiki_read(page_id: str) -> Page
 **Returns:**
 ```python
 {
+    "status": "success",
     "page_id": "concept-transformer",
     "title": "Transformer Architecture",
     "content": "...",
@@ -93,6 +95,9 @@ def wiki_graph_neighbors(page_id: str, depth: int = 1) -> Graph
 **Returns:**
 ```python
 {
+    "status": "success",
+    "page_id": "concept-transformer",
+    "depth": 1,
     "nodes": [
         {"page_id": "concept-transformer", "title": "..."},
         {"page_id": "concept-attention", "title": "..."}
@@ -115,8 +120,8 @@ def wiki_status() -> Status
 **Returns:**
 ```python
 {
+    "status": "success",
     "total_pages": 42,
-    "total_sources": 15,
     "pending_patches": 3,
     "last_update": "2026-04-14T04:00:00Z",
     "health": "healthy"
@@ -127,7 +132,10 @@ def wiki_status() -> Status
 
 ### wiki_ingest
 
-Ingest a new source document into the wiki.
+Ingest a local text file into the wiki by proposing a patch.
+
+**Description:**
+Reads a text file from `source_path`, creates or updates a wiki page based on the filename, and proposes a patch for human review. The page ID is derived from the file stem (e.g., `document.txt` → `document`).
 
 **Signature:**
 ```python
@@ -135,7 +143,7 @@ def wiki_ingest(source_path: str, agent_id: str) -> dict
 ```
 
 **Parameters:**
-- `source_path`: Path to source document
+- `source_path`: Path to local text file (absolute or relative to wiki root)
 - `agent_id`: ID of the agent performing ingestion
 
 **Returns:**
@@ -143,8 +151,10 @@ def wiki_ingest(source_path: str, agent_id: str) -> dict
 {
     "status": "success",
     "patch_id": "patch-20260414-035500",
-    "affected_pages": ["concept-transformer", "paper-attention"],
-    "lint_status": "passed"
+    "affected_pages": ["document"],
+    "source_path": "/path/to/document.txt",
+    "requires_approval": true,
+    "confidence": 0.9
 }
 ```
 
@@ -198,9 +208,25 @@ def wiki_propose_patch(
     "status": "success",
     "patch_id": "patch-20260414-035500",
     "requires_approval": true,
-    "confidence": 0.95
+    "confidence": 0.95,
+    "lint_status": "passed"  # or "failed" if lint errors detected
     # Note: shadow_eval is NOT included in response (hidden by default per approval_policy.yaml)
     # Only visible in diagnostic mode or post-analysis
+}
+```
+
+**Error Response (lint failed):**
+```python
+{
+    "status": "failed",
+    "reason": "lint_failed",
+    "lint_errors": [
+        {
+            "code": "missing_source_refs",
+            "file": "wiki/concepts/transformer.md",
+            "message": "Field 'source_refs' must be a non-empty list."
+        }
+    ]
 }
 ```
 
@@ -283,7 +309,7 @@ List pending conflicts.
 
 **Signature:**
 ```python
-def wiki_list_conflicts(status: str = "pending") -> List[Conflict]
+def wiki_list_conflicts(status: str = "pending") -> Dict[str, Any]
 ```
 
 **Parameters:**
@@ -291,15 +317,20 @@ def wiki_list_conflicts(status: str = "pending") -> List[Conflict]
 
 **Returns:**
 ```python
-[
-    {
-        "conflict_id": "conflict-abc123",
-        "type": "semantic_level",
-        "detected_at": 1713067500.123,
-        "patches": ["patch-001", "patch-002"],
-        "status": "pending"
-    }
-]
+{
+    "status": "success",
+    "conflicts": [
+        {
+            "conflict_id": "conflict-abc123",
+            "type": "page_overlap",
+            "detected_at": 1713067500.123,
+            "patches": ["patch-001", "patch-002"],
+            "pages": ["concept-transformer"],
+            "status": "pending"
+        }
+    ],
+    "total": 1
+}
 ```
 
 ### wiki_resolve_conflict
@@ -339,27 +370,30 @@ Run lint checks on wiki content.
 
 **Signature:**
 ```python
-def wiki_lint(wiki_root: str, scope: str = "all") -> Dict[str, Any]
+def wiki_lint(scope: str = "all") -> Dict[str, Any]
 ```
 
 **Parameters:**
-- `wiki_root`: Path to wiki root directory
 - `scope`: Lint scope - `"all"` (all pages) / `"pending"` (pages affected by pending patches) / `"recent"` (pages changed in last commit)
 
 **Returns:**
 ```python
 {
     "status": "passed",
+    "scope": "all",
+    "checked_files": ["wiki/concepts/transformer.md", "wiki/papers/attention.md"],
     "checks": [
         {"name": "frontmatter_validation", "passed": true},
-        {"name": "dead_link_check", "passed": true},
-        {"name": "orphan_page_check", "passed": true},
-        {"name": "reference_existence", "passed": true},
-        {"name": "duplicate_topic_check", "passed": true},
-        {"name": "source_refs_check", "passed": true}
+        {"name": "required_fields", "passed": true},
+        {"name": "confidence_range", "passed": true},
+        {"name": "source_refs", "passed": true},
+        {"name": "duplicate_page_id", "passed": true},
+        {"name": "dead_link_check", "passed": true}
     ],
     "errors": [],
-    "warnings": []
+    "warnings": [],
+    "errors_count": 0,
+    "warnings_count": 0
 }
 ```
 
@@ -385,14 +419,16 @@ Rollback a change (requires approval).
 ```python
 def wiki_rollback(
     change_id: str,
-    approved_by: str,
+    signed_approval: str,
+    expected_base_commit: str,
     reason: str
 ) -> dict
 ```
 
 **Parameters:**
 - `change_id`: ID of the change to rollback
-- `approved_by`: ID of the approver
+- `signed_approval`: Signed approval token (from ACL)
+- `expected_base_commit`: Expected git commit hash (TOCTOU protection)
 - `reason`: Reason for rollback
 
 **Returns:**
@@ -405,13 +441,37 @@ def wiki_rollback(
 }
 ```
 
-**Error Response:**
+**Error Responses:**
 ```python
+# Patch ID mismatch
 {
     "status": "failed",
-    "reason": "operation_type_not_rollbackable",
-    "operation_type": "schema_change",
-    "requires": "manual_intervention"
+    "reason": "patch_id_mismatch",
+    "expected": "patch-001",
+    "actual": "patch-002"
+}
+
+# Signature base commit mismatch
+{
+    "status": "failed",
+    "reason": "signature_base_commit_mismatch",
+    "expected": "abc123...",
+    "actual": "def456..."
+}
+
+# Base commit changed (TOCTOU)
+{
+    "status": "failed",
+    "reason": "base_commit_changed",
+    "expected": "abc123...",
+    "actual": "def456..."
+}
+
+# Insufficient permission
+{
+    "status": "failed",
+    "reason": "insufficient_permission",
+    "message": "Approver 'user-x' cannot approve 'rollback'"
 }
 ```
 
